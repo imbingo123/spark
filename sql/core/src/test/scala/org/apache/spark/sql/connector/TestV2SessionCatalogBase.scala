@@ -22,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.JavaConverters._
 
-import org.apache.spark.sql.connector.catalog.{DelegatingCatalogExtension, Identifier, Table}
+import org.apache.spark.sql.catalyst.catalog.CatalogTableType
+import org.apache.spark.sql.connector.catalog.{DelegatingCatalogExtension, Identifier, Table, V1Table}
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 
@@ -41,24 +42,18 @@ private[connector] trait TestV2SessionCatalogBase[T <: Table] extends Delegating
       partitions: Array[Transform],
       properties: util.Map[String, String]): T
 
-  protected def fullIdentifier(ident: Identifier): Identifier = {
-    if (ident.namespace().isEmpty) {
-      Identifier.of(Array("default"), ident.name())
-    } else {
-      ident
-    }
-  }
-
   override def loadTable(ident: Identifier): Table = {
-    val fullIdent = fullIdentifier(ident)
-    if (tables.containsKey(fullIdent)) {
-      tables.get(fullIdent)
+    if (tables.containsKey(ident)) {
+      tables.get(ident)
     } else {
       // Table was created through the built-in catalog
-      val t = super.loadTable(fullIdent)
-      val table = newTable(t.name(), t.schema(), t.partitioning(), t.properties())
-      tables.put(fullIdent, table)
-      table
+      super.loadTable(ident) match {
+        case v1Table: V1Table if v1Table.v1Table.tableType == CatalogTableType.VIEW => v1Table
+        case t =>
+          val table = newTable(t.name(), t.schema(), t.partitioning(), t.properties())
+          tables.put(ident, table)
+          table
+      }
     }
   }
 
@@ -69,9 +64,13 @@ private[connector] trait TestV2SessionCatalogBase[T <: Table] extends Delegating
       properties: util.Map[String, String]): Table = {
     val created = super.createTable(ident, schema, partitions, properties)
     val t = newTable(created.name(), schema, partitions, properties)
-    val fullIdent = fullIdentifier(ident)
-    tables.put(fullIdent, t)
+    tables.put(ident, t)
     t
+  }
+
+  override def dropTable(ident: Identifier): Boolean = {
+    tables.remove(ident)
+    super.dropTable(ident)
   }
 
   def clearTables(): Unit = {

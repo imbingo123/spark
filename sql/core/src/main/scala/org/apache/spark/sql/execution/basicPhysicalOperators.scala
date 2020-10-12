@@ -17,10 +17,11 @@
 
 package org.apache.spark.sql.execution
 
+import java.util.concurrent.{Future => JFuture}
 import java.util.concurrent.TimeUnit._
 
 import scala.collection.mutable
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext}
 import scala.concurrent.duration.Duration
 
 import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, TaskContext}
@@ -29,16 +30,19 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.BindReferences.bindReferences
 import org.apache.spark.sql.catalyst.expressions.codegen._
-import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.plans.physical._
 import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.types.{LongType, StructType}
-import org.apache.spark.util.ThreadUtils
+import org.apache.spark.util.{ThreadUtils, Utils}
 import org.apache.spark.util.random.{BernoulliCellSampler, PoissonSampler}
 
 /** Physical plan for Project. */
 case class ProjectExec(projectList: Seq[NamedExpression], child: SparkPlan)
-  extends UnaryExecNode with CodegenSupport {
+  extends UnaryExecNode
+    with CodegenSupport
+    with AliasAwareOutputPartitioning
+    with AliasAwareOutputOrdering {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
 
@@ -62,10 +66,23 @@ case class ProjectExec(projectList: Seq[NamedExpression], child: SparkPlan)
 
   override def doConsume(ctx: CodegenContext, input: Seq[ExprCode], row: ExprCode): String = {
     val exprs = bindReferences[Expression](projectList, child.output)
-    val resultVars = exprs.map(_.genCode(ctx))
+    val (subExprsCode, resultVars, localValInputs) = if (conf.subexpressionEliminationEnabled) {
+      // subexpression elimination
+      val subExprs = ctx.subexpressionEliminationForWholeStageCodegen(exprs)
+      val genVars = ctx.withSubExprEliminationExprs(subExprs.states) {
+        exprs.map(_.genCode(ctx))
+      }
+      (subExprs.codes.mkString("\n"), genVars, subExprs.exprCodesNeedEvaluate)
+    } else {
+      ("", exprs.map(_.genCode(ctx)), Seq.empty)
+    }
+
     // Evaluation of non-deterministic expressions can't be deferred.
     val nonDeterministicAttrs = projectList.filterNot(_.deterministic).map(_.toAttribute)
     s"""
+       |// common sub-expressions
+       |${evaluateVariables(localValInputs)}
+       |$subExprsCode
        |${evaluateRequiredVariables(output, resultVars, AttributeSet(nonDeterministicAttrs))}
        |${consume(ctx, resultVars)}
      """.stripMargin
@@ -79,19 +96,18 @@ case class ProjectExec(projectList: Seq[NamedExpression], child: SparkPlan)
     }
   }
 
-  override def outputOrdering: Seq[SortOrder] = child.outputOrdering
+  override protected def outputExpressions: Seq[NamedExpression] = projectList
 
-  override def outputPartitioning: Partitioning = child.outputPartitioning
+  override protected def orderingExpressions: Seq[SortOrder] = child.outputOrdering
 
   override def verboseStringWithOperatorId(): String = {
     s"""
-       |(${ExplainUtils.getOpId(this)}) $nodeName ${ExplainUtils.getCodegenId(this)}
-       |Output    : ${projectList.mkString("[", ", ", "]")}
-       |Input     : ${child.output.mkString("[", ", ", "]")}
-     """.stripMargin
+       |$formattedNodeName
+       |${ExplainUtils.generateFieldString("Output", projectList)}
+       |${ExplainUtils.generateFieldString("Input", child.output)}
+       |""".stripMargin
   }
 }
-
 
 /** Physical plan for Filter. */
 case class FilterExec(condition: Expression, child: SparkPlan)
@@ -227,7 +243,7 @@ case class FilterExec(condition: Expression, child: SparkPlan)
   protected override def doExecute(): RDD[InternalRow] = {
     val numOutputRows = longMetric("numOutputRows")
     child.execute().mapPartitionsWithIndexInternal { (index, iter) =>
-      val predicate = newPredicate(condition, child.output)
+      val predicate = Predicate.create(condition, child.output)
       predicate.initialize(0)
       iter.filter { row =>
         val r = predicate.eval(row)
@@ -243,10 +259,10 @@ case class FilterExec(condition: Expression, child: SparkPlan)
 
   override def verboseStringWithOperatorId(): String = {
     s"""
-       |(${ExplainUtils.getOpId(this)}) $nodeName ${ExplainUtils.getCodegenId(this)}
-       |Input     : ${child.output.mkString("[", ", ", "]")}
+       |$formattedNodeName
+       |${ExplainUtils.generateFieldString("Input", child.output)}
        |Condition : ${condition}
-     """.stripMargin
+       |""".stripMargin
   }
 }
 
@@ -368,6 +384,7 @@ case class RangeExec(range: org.apache.spark.sql.catalyst.plans.logical.Range)
   val step: Long = range.step
   val numSlices: Int = range.numSlices.getOrElse(sparkContext.defaultParallelism)
   val numElements: BigInt = range.numElements
+  val isEmptyRange: Boolean = start == end || (start < end ^ 0 < step)
 
   override val output: Seq[Attribute] = range.output
 
@@ -393,7 +410,7 @@ case class RangeExec(range: org.apache.spark.sql.catalyst.plans.logical.Range)
   }
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = {
-    val rdd = if (start == end || (start < end ^ 0 < step)) {
+    val rdd = if (isEmptyRange) {
       new EmptyRDD[InternalRow](sqlContext.sparkContext)
     } else {
       sqlContext.sparkContext.parallelize(0 until numSlices, numSlices).map(i => InternalRow(i))
@@ -559,58 +576,64 @@ case class RangeExec(range: org.apache.spark.sql.catalyst.plans.logical.Range)
 
   protected override def doExecute(): RDD[InternalRow] = {
     val numOutputRows = longMetric("numOutputRows")
-    sqlContext
-      .sparkContext
-      .parallelize(0 until numSlices, numSlices)
-      .mapPartitionsWithIndex { (i, _) =>
-        val partitionStart = (i * numElements) / numSlices * step + start
-        val partitionEnd = (((i + 1) * numElements) / numSlices) * step + start
-        def getSafeMargin(bi: BigInt): Long =
-          if (bi.isValidLong) {
-            bi.toLong
-          } else if (bi > 0) {
-            Long.MaxValue
-          } else {
-            Long.MinValue
-          }
-        val safePartitionStart = getSafeMargin(partitionStart)
-        val safePartitionEnd = getSafeMargin(partitionEnd)
-        val rowSize = UnsafeRow.calculateBitSetWidthInBytes(1) + LongType.defaultSize
-        val unsafeRow = UnsafeRow.createFromByteArray(rowSize, 1)
-        val taskContext = TaskContext.get()
+    if (isEmptyRange) {
+      new EmptyRDD[InternalRow](sqlContext.sparkContext)
+    } else {
+      sqlContext
+        .sparkContext
+        .parallelize(0 until numSlices, numSlices)
+        .mapPartitionsWithIndex { (i, _) =>
+          val partitionStart = (i * numElements) / numSlices * step + start
+          val partitionEnd = (((i + 1) * numElements) / numSlices) * step + start
 
-        val iter = new Iterator[InternalRow] {
-          private[this] var number: Long = safePartitionStart
-          private[this] var overflow: Boolean = false
-          private[this] val inputMetrics = taskContext.taskMetrics().inputMetrics
-
-          override def hasNext =
-            if (!overflow) {
-              if (step > 0) {
-                number < safePartitionEnd
-              } else {
-                number > safePartitionEnd
-              }
-            } else false
-
-          override def next() = {
-            val ret = number
-            number += step
-            if (number < ret ^ step < 0) {
-              // we have Long.MaxValue + Long.MaxValue < Long.MaxValue
-              // and Long.MinValue + Long.MinValue > Long.MinValue, so iff the step causes a step
-              // back, we are pretty sure that we have an overflow.
-              overflow = true
+          def getSafeMargin(bi: BigInt): Long =
+            if (bi.isValidLong) {
+              bi.toLong
+            } else if (bi > 0) {
+              Long.MaxValue
+            } else {
+              Long.MinValue
             }
 
-            numOutputRows += 1
-            inputMetrics.incRecordsRead(1)
-            unsafeRow.setLong(0, ret)
-            unsafeRow
+          val safePartitionStart = getSafeMargin(partitionStart)
+          val safePartitionEnd = getSafeMargin(partitionEnd)
+          val rowSize = UnsafeRow.calculateBitSetWidthInBytes(1) + LongType.defaultSize
+          val unsafeRow = UnsafeRow.createFromByteArray(rowSize, 1)
+          val taskContext = TaskContext.get()
+
+          val iter = new Iterator[InternalRow] {
+            private[this] var number: Long = safePartitionStart
+            private[this] var overflow: Boolean = false
+            private[this] val inputMetrics = taskContext.taskMetrics().inputMetrics
+
+            override def hasNext =
+              if (!overflow) {
+                if (step > 0) {
+                  number < safePartitionEnd
+                } else {
+                  number > safePartitionEnd
+                }
+              } else false
+
+            override def next() = {
+              val ret = number
+              number += step
+              if (number < ret ^ step < 0) {
+                // we have Long.MaxValue + Long.MaxValue < Long.MaxValue
+                // and Long.MinValue + Long.MinValue > Long.MinValue, so iff the step causes a step
+                // back, we are pretty sure that we have an overflow.
+                overflow = true
+              }
+
+              numOutputRows += 1
+              inputMetrics.incRecordsRead(1)
+              unsafeRow.setLong(0, ret)
+              unsafeRow
+            }
           }
+          new InterruptibleIterator(taskContext, iter)
         }
-        new InterruptibleIterator(taskContext, iter)
-      }
+    }
   }
 
   override def simpleString(maxFields: Int): String = {
@@ -715,7 +738,8 @@ abstract class BaseSubqueryExec extends SparkPlan {
       prefix: String = "",
       addSuffix: Boolean = false,
       maxFields: Int,
-      printNodeId: Boolean): Unit = {
+      printNodeId: Boolean,
+      indent: Int = 0): Unit = {
     /**
      * In the new explain mode `EXPLAIN FORMATTED`, the subqueries are not shown in the
      * main plan and are printed separately along with correlation information with
@@ -731,7 +755,8 @@ abstract class BaseSubqueryExec extends SparkPlan {
         "",
         false,
         maxFields,
-        printNodeId)
+        printNodeId,
+        indent)
     }
   }
 }
@@ -747,10 +772,12 @@ case class SubqueryExec(name: String, child: SparkPlan)
     "collectTime" -> SQLMetrics.createTimingMetric(sparkContext, "time to collect"))
 
   @transient
-  private lazy val relationFuture: Future[Array[InternalRow]] = {
+  private lazy val relationFuture: JFuture[Array[InternalRow]] = {
     // relationFuture is used in "doExecute". Therefore we can get the execution id correctly here.
     val executionId = sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
-    Future {
+    SQLExecution.withThreadLocalCaptured[Array[InternalRow]](
+      sqlContext.sparkSession,
+      SubqueryExec.executionContext) {
       // This will run in another thread. Set the execution id so that we can connect these jobs
       // with the correct execution.
       SQLExecution.withExecutionId(sqlContext.sparkSession, executionId) {
@@ -765,7 +792,7 @@ case class SubqueryExec(name: String, child: SparkPlan)
         SQLMetrics.postDriverMetricUpdates(sparkContext, executionId, metrics.values.toSeq)
         rows
       }
-    }(SubqueryExec.executionContext)
+    }
   }
 
   protected override def doCanonicalize(): SparkPlan = {
@@ -789,7 +816,8 @@ case class SubqueryExec(name: String, child: SparkPlan)
 
 object SubqueryExec {
   private[execution] val executionContext = ExecutionContext.fromExecutorService(
-    ThreadUtils.newDaemonCachedThreadPool("subquery", 16))
+    ThreadUtils.newDaemonCachedThreadPool("subquery",
+      SQLConf.get.getConf(StaticSQLConf.SUBQUERY_MAX_THREAD_THRESHOLD)))
 }
 
 /**

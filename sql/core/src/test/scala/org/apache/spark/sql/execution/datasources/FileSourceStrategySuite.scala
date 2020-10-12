@@ -31,12 +31,13 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.expressions.{Expression, ExpressionSet, PredicateHelper}
 import org.apache.spark.sql.catalyst.util
-import org.apache.spark.sql.execution.{DataSourceScanExec, SparkPlan}
+import org.apache.spark.sql.execution.{DataSourceScanExec, FileSourceScanExec, SparkPlan}
+import org.apache.spark.sql.execution.datasources.v2.DataSourceV2ScanRelation
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.sql.types.{IntegerType, StructType}
+import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
 import org.apache.spark.util.Utils
 
 class FileSourceStrategySuite extends QueryTest with SharedSparkSession with PredicateHelper {
@@ -495,6 +496,106 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
       val filtered = ds.filter($"_1" === "true").toDF()
       checkAnswer(readBack, filtered)
     }
+  }
+
+  test("SPARK-29768: Column pruning through non-deterministic expressions") {
+    withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "parquet") {
+      withTempPath { path =>
+        spark.range(10)
+          .selectExpr("id as key", "id * 3 as s1", "id * 5 as s2")
+          .write.format("parquet").save(path.getAbsolutePath)
+        val df1 = spark.read.parquet(path.getAbsolutePath)
+        val df2 = df1.selectExpr("key", "rand()").where("key > 5")
+        val plan = df2.queryExecution.sparkPlan
+        val scan = plan.collect { case scan: FileSourceScanExec => scan }
+        assert(scan.size === 1)
+        assert(scan.head.requiredSchema == StructType(StructField("key", LongType) :: Nil))
+      }
+    }
+
+    withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "") {
+      withTempPath { path =>
+        spark.range(10)
+          .selectExpr("id as key", "id * 3 as s1", "id * 5 as s2")
+          .write.format("parquet").save(path.getAbsolutePath)
+        val df1 = spark.read.parquet(path.getAbsolutePath)
+        val df2 = df1.selectExpr("key", "rand()").where("key > 5")
+        val plan = df2.queryExecution.optimizedPlan
+        val scan = plan.collect { case r: DataSourceV2ScanRelation => r }
+        assert(scan.size === 1)
+        assert(scan.head.scan.readSchema() == StructType(StructField("key", LongType) :: Nil))
+      }
+    }
+  }
+
+  test("SPARK-32019: Add spark.sql.files.minPartitionNum config") {
+    withSQLConf(SQLConf.FILES_MIN_PARTITION_NUM.key -> "1") {
+      val table =
+        createTable(files = Seq(
+          "file1" -> 1,
+          "file2" -> 1,
+          "file3" -> 1
+        ))
+      assert(table.rdd.partitions.length == 1)
+    }
+
+    withSQLConf(SQLConf.FILES_MIN_PARTITION_NUM.key -> "10") {
+      val table =
+        createTable(files = Seq(
+          "file1" -> 1,
+          "file2" -> 1,
+          "file3" -> 1
+        ))
+      assert(table.rdd.partitions.length == 3)
+    }
+
+    withSQLConf(
+      SQLConf.FILES_MAX_PARTITION_BYTES.key -> "2MB",
+      SQLConf.FILES_OPEN_COST_IN_BYTES.key -> String.valueOf(4 * 1024 * 1024)) {
+
+      withSQLConf(SQLConf.FILES_MIN_PARTITION_NUM.key -> "8") {
+        val partitions = (1 to 12).map(i => s"file$i" -> 2 * 1024 * 1024)
+        val table = createTable(files = partitions)
+        // partition is limited by filesMaxPartitionBytes(2MB)
+        assert(table.rdd.partitions.length == 12)
+      }
+
+      withSQLConf(SQLConf.FILES_MIN_PARTITION_NUM.key -> "16") {
+        val partitions = (1 to 12).map(i => s"file$i" -> 4 * 1024 * 1024)
+        val table = createTable(files = partitions)
+        assert(table.rdd.partitions.length == 24)
+      }
+    }
+  }
+
+  test("SPARK-32352: Partially push down support data filter if it mixed in partition filters") {
+    val table =
+      createTable(
+        files = Seq(
+          "p1=1/file1" -> 10,
+          "p1=2/file2" -> 10,
+          "p1=3/file3" -> 10,
+          "p1=4/file4" -> 10))
+
+    checkScan(table.where("(c1 = 1) OR (c1 = 2)")) { partitions =>
+      assert(partitions.size == 1, "when checking partitions")
+    }
+    checkDataFilters(Set(Or(EqualTo("c1", 1), EqualTo("c1", 2))))
+
+    checkScan(table.where("(p1 = 1 AND c1 = 1) OR (p1 = 2 and c1 = 2)")) { partitions =>
+      assert(partitions.size == 1, "when checking partitions")
+    }
+    checkDataFilters(Set(Or(EqualTo("c1", 1), EqualTo("c1", 2))))
+
+    checkScan(table.where("(p1 = '1' AND c1 = 2) OR (c1 = 1 OR p1 = '2')")) { partitions =>
+      assert(partitions.size == 1, "when checking partitions")
+    }
+    checkDataFilters(Set.empty)
+
+    checkScan(table.where("p1 = '1' OR (p1 = '2' AND c1 = 1)")) { partitions =>
+      assert(partitions.size == 1, "when checking partitions")
+    }
+    checkDataFilters(Set.empty)
   }
 
   // Helpers for checking the arguments passed to the FileFormat.

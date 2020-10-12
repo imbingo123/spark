@@ -27,14 +27,11 @@ import java.util.concurrent.Future;
 import com.codahale.metrics.MetricSet;
 import com.google.common.collect.Lists;
 import org.apache.spark.network.client.RpcResponseCallback;
-import org.apache.spark.network.shuffle.protocol.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.spark.network.TransportContext;
 import org.apache.spark.network.client.TransportClient;
 import org.apache.spark.network.client.TransportClientBootstrap;
-import org.apache.spark.network.client.TransportClientFactory;
+import org.apache.spark.network.shuffle.protocol.*;
+
+import org.apache.spark.network.TransportContext;
 import org.apache.spark.network.crypto.AuthClientBootstrap;
 import org.apache.spark.network.sasl.SecretKeyHolder;
 import org.apache.spark.network.server.NoOpRpcHandler;
@@ -46,15 +43,10 @@ import org.apache.spark.network.util.TransportConf;
  * (via BlockTransferService), which has the downside of losing the data if we lose the executors.
  */
 public class ExternalBlockStoreClient extends BlockStoreClient {
-  private static final Logger logger = LoggerFactory.getLogger(ExternalBlockStoreClient.class);
-
   private final TransportConf conf;
   private final boolean authEnabled;
   private final SecretKeyHolder secretKeyHolder;
   private final long registrationTimeoutMs;
-
-  protected volatile TransportClientFactory clientFactory;
-  protected String appId;
 
   /**
    * Creates an external shuffle client, with SASL optionally enabled. If SASL is not enabled,
@@ -69,10 +61,6 @@ public class ExternalBlockStoreClient extends BlockStoreClient {
     this.secretKeyHolder = secretKeyHolder;
     this.authEnabled = authEnabled;
     this.registrationTimeoutMs = registrationTimeoutMs;
-  }
-
-  protected void checkInit() {
-    assert appId != null : "Called before init()";
   }
 
   /**
@@ -100,11 +88,12 @@ public class ExternalBlockStoreClient extends BlockStoreClient {
     checkInit();
     logger.debug("External shuffle fetch from {}:{} (executor id {})", host, port, execId);
     try {
+      int maxRetries = conf.maxIORetries();
       RetryingBlockFetcher.BlockFetchStarter blockFetchStarter =
           (blockIds1, listener1) -> {
             // Unless this client is closed.
             if (clientFactory != null) {
-              TransportClient client = clientFactory.createClient(host, port);
+              TransportClient client = clientFactory.createClient(host, port, maxRetries > 0);
               new OneForOneBlockFetcher(client, appId, execId,
                 blockIds1, listener1, conf, downloadFileManager).start();
             } else {
@@ -112,7 +101,6 @@ public class ExternalBlockStoreClient extends BlockStoreClient {
             }
           };
 
-      int maxRetries = conf.maxIORetries();
       if (maxRetries > 0) {
         // Note this Fetcher will correctly handle maxRetries == 0; we avoid it just in case there's
         // a bug in this code. We should remove the if statement once we're sure of the stability.
@@ -174,17 +162,14 @@ public class ExternalBlockStoreClient extends BlockStoreClient {
           logger.warn("Error trying to remove RDD blocks " + Arrays.toString(blockIds) +
             " via external shuffle service from executor: " + execId, t);
           numRemovedBlocksFuture.complete(0);
-        } finally {
-          client.close();
         }
       }
 
       @Override
       public void onFailure(Throwable e) {
         logger.warn("Error trying to remove RDD blocks " + Arrays.toString(blockIds) +
-            " via external shuffle service from executor: " + execId, e);
+          " via external shuffle service from executor: " + execId, e);
         numRemovedBlocksFuture.complete(0);
-        client.close();
       }
     });
     return numRemovedBlocksFuture;

@@ -37,6 +37,7 @@ import org.apache.hive.jdbc.HiveDriver
 import org.apache.hive.service.auth.PlainSaslHelper
 import org.apache.hive.service.cli.{FetchOrientation, FetchType, GetInfoType, RowSet}
 import org.apache.hive.service.cli.thrift.ThriftCLIServiceClient
+import org.apache.hive.service.rpc.thrift.TCLIService.Client
 import org.apache.thrift.protocol.TBinaryProtocol
 import org.apache.thrift.transport.TSocket
 import org.scalatest.BeforeAndAfterAll
@@ -67,7 +68,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
     val user = System.getProperty("user.name")
     val transport = PlainSaslHelper.getPlainTransport(user, "anonymous", rawTransport)
     val protocol = new TBinaryProtocol(transport)
-    val client = new ThriftCLIServiceClient(new ThriftserverShimUtils.Client(protocol))
+    val client = new ThriftCLIServiceClient(new Client(protocol))
 
     transport.open()
     try f(client) finally transport.close()
@@ -101,7 +102,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
 
       withJdbcStatement("test_16563") { statement =>
         val queries = Seq(
-          "CREATE TABLE test_16563(key INT, val STRING)",
+          "CREATE TABLE test_16563(key INT, val STRING) USING hive",
           s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_16563")
 
         queries.foreach(statement.execute)
@@ -165,7 +166,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
     withJdbcStatement("test") { statement =>
       val queries = Seq(
         "SET spark.sql.shuffle.partitions=3",
-        "CREATE TABLE test(key INT, val STRING)",
+        "CREATE TABLE test(key INT, val STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test",
         "CACHE TABLE test")
 
@@ -191,7 +192,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
   test("SPARK-3004 regression: result set containing NULL") {
     withJdbcStatement("test_null") { statement =>
       val queries = Seq(
-        "CREATE TABLE test_null(key INT, val STRING)",
+        "CREATE TABLE test_null(key INT, val STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKvWithNull}' OVERWRITE INTO TABLE test_null")
 
       queries.foreach(statement.execute)
@@ -211,7 +212,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
   test("SPARK-4292 regression: result set iterator issue") {
     withJdbcStatement("test_4292") { statement =>
       val queries = Seq(
-        "CREATE TABLE test_4292(key INT, val STRING)",
+        "CREATE TABLE test_4292(key INT, val STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_4292")
 
       queries.foreach(statement.execute)
@@ -228,7 +229,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
   test("SPARK-4309 regression: Date type support") {
     withJdbcStatement("test_date") { statement =>
       val queries = Seq(
-        "CREATE TABLE test_date(key INT, value STRING)",
+        "CREATE TABLE test_date(key INT, value STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_date")
 
       queries.foreach(statement.execute)
@@ -245,7 +246,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
   test("SPARK-4407 regression: Complex type support") {
     withJdbcStatement("test_map") { statement =>
       val queries = Seq(
-        "CREATE TABLE test_map(key INT, value STRING)",
+        "CREATE TABLE test_map(key INT, value STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_map")
 
       queries.foreach(statement.execute)
@@ -268,7 +269,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
   test("SPARK-12143 regression: Binary type support") {
     withJdbcStatement("test_binary") { statement =>
       val queries = Seq(
-        "CREATE TABLE test_binary(key INT, value STRING)",
+        "CREATE TABLE test_binary(key INT, value STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_binary")
 
       queries.foreach(statement.execute)
@@ -294,7 +295,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
       { statement =>
 
         val queries = Seq(
-            "CREATE TABLE test_map(key INT, value STRING)",
+            "CREATE TABLE test_map(key INT, value STRING) USING hive",
             s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_map",
             "CACHE TABLE test_table AS SELECT key FROM test_map ORDER BY key DESC",
             "CREATE DATABASE db1")
@@ -501,7 +502,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
       {
         statement =>
           val queries = Seq(
-            "CREATE TABLE smallKV(key INT, val STRING)",
+            "CREATE TABLE smallKV(key INT, val STRING) USING hive",
             s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE smallKV",
             """CREATE TABLE addJar(key string)
               |ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
@@ -544,11 +545,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
         conf += resultSet.getString(1) -> resultSet.getString(2)
       }
 
-      if (HiveUtils.isHive23) {
-        assert(conf.get(HiveUtils.FAKE_HIVE_VERSION.key) === Some("2.3.6"))
-      } else {
-        assert(conf.get(HiveUtils.FAKE_HIVE_VERSION.key) === Some("1.2.1"))
-      }
+      assert(conf.get(HiveUtils.FAKE_HIVE_VERSION.key) === Some("2.3.7"))
     }
   }
 
@@ -561,11 +558,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
         conf += resultSet.getString(1) -> resultSet.getString(2)
       }
 
-      if (HiveUtils.isHive23) {
-        assert(conf.get(HiveUtils.FAKE_HIVE_VERSION.key) === Some("2.3.6"))
-      } else {
-        assert(conf.get(HiveUtils.FAKE_HIVE_VERSION.key) === Some("1.2.1"))
-      }
+      assert(conf.get(HiveUtils.FAKE_HIVE_VERSION.key) === Some("2.3.7"))
     }
   }
 
@@ -598,7 +591,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
         val dataPath = "../hive/src/test/resources/data/files/kv1.txt"
 
         Seq(
-          "CREATE TABLE test_udtf(key INT, value STRING)",
+          "CREATE TABLE test_udtf(key INT, value STRING) USING hive",
           s"LOAD DATA LOCAL INPATH '$dataPath' OVERWRITE INTO TABLE test_udtf"
         ).foreach(statement.execute)
 
@@ -643,11 +636,7 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
       val sessionHandle = client.openSession(user, "")
       val sessionID = sessionHandle.getSessionId
 
-      if (HiveUtils.isHive23) {
-        assert(pipeoutFileList(sessionID).length == 2)
-      } else {
-        assert(pipeoutFileList(sessionID).length == 1)
-      }
+      assert(pipeoutFileList(sessionID).length == 2)
 
       client.closeSession(sessionHandle)
 
@@ -683,6 +672,23 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
         statement.executeQuery("SELECT interval 3 months 1 hou")
       }
       assert(e.getMessage.contains("org.apache.spark.sql.catalyst.parser.ParseException"))
+    }
+  }
+
+  test("Query Intervals in VIEWs through thrift server") {
+    val viewName1 = "view_interval_1"
+    val viewName2 = "view_interval_2"
+    val ddl1 = s"CREATE GLOBAL TEMP VIEW $viewName1 AS SELECT INTERVAL 1 DAY AS i"
+    val ddl2 = s"CREATE TEMP VIEW $viewName2 as select * from global_temp.$viewName1"
+    withJdbcStatement(viewName1, viewName2) { statement =>
+      statement.executeQuery(ddl1)
+      statement.executeQuery(ddl2)
+      val rs = statement.executeQuery(s"SELECT v1.i as a, v2.i as b FROM global_temp.$viewName1" +
+        s" v1 join $viewName2 v2 on date_part('DAY', v1.i) = date_part('DAY', v2.i)")
+      while (rs.next()) {
+        assert(rs.getString("a") === "1 days")
+        assert(rs.getString("b") === "1 days")
+      }
     }
   }
 
@@ -771,6 +777,109 @@ class HiveThriftBinaryServerSuite extends HiveThriftJdbcTest {
       client.closeSession(sessionHandle)
     }
   }
+
+  test("SPARK-29492: use add jar in sync mode") {
+    withCLIServiceClient { client =>
+      val user = System.getProperty("user.name")
+      val sessionHandle = client.openSession(user, "")
+      withJdbcStatement("smallKV", "addJar") { statement =>
+        val confOverlay = new java.util.HashMap[java.lang.String, java.lang.String]
+        val jarFile = HiveTestJars.getHiveHcatalogCoreJar().getCanonicalPath
+
+        Seq(s"ADD JAR $jarFile",
+          "CREATE TABLE smallKV(key INT, val STRING) USING hive",
+          s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE smallKV")
+          .foreach(query => client.executeStatement(sessionHandle, query, confOverlay))
+
+        client.executeStatement(sessionHandle,
+          """CREATE TABLE addJar(key string)
+            |ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
+          """.stripMargin, confOverlay)
+
+        client.executeStatement(sessionHandle,
+          "INSERT INTO TABLE addJar SELECT 'k1' as key FROM smallKV limit 1", confOverlay)
+
+        val operationHandle = client.executeStatement(
+          sessionHandle,
+          "SELECT key FROM addJar",
+          confOverlay)
+
+        // Fetch result first time
+        assertResult(1, "Fetching result first time from next row") {
+
+          val rows_next = client.fetchResults(
+            operationHandle,
+            FetchOrientation.FETCH_NEXT,
+            1000,
+            FetchType.QUERY_OUTPUT)
+          rows_next.numRows()
+        }
+      }
+    }
+  }
+
+  test("SPARK-31859 Thriftserver works with spark.sql.datetime.java8API.enabled=true") {
+    withJdbcStatement() { st =>
+      st.execute("set spark.sql.datetime.java8API.enabled=true")
+      val rs = st.executeQuery("select date '2020-05-28', timestamp '2020-05-28 00:00:00'")
+      rs.next()
+      assert(rs.getDate(1).toString() == "2020-05-28")
+      assert(rs.getTimestamp(2).toString() == "2020-05-28 00:00:00.0")
+    }
+  }
+
+  test("SPARK-31861 Thriftserver respects spark.sql.session.timeZone") {
+    withJdbcStatement() { st =>
+      st.execute("set spark.sql.session.timeZone=+03:15") // different than Thriftserver's JVM tz
+      val rs = st.executeQuery("select timestamp '2020-05-28 10:00:00'")
+      rs.next()
+      // The timestamp as string is the same as the literal
+      assert(rs.getString(1) == "2020-05-28 10:00:00.0")
+      // Parsing it to java.sql.Timestamp in the client will always result in a timestamp
+      // in client default JVM timezone. The string value of the Timestamp will match the literal,
+      // but if the JDBC application cares about the internal timezone and UTC offset of the
+      // Timestamp object, it should set spark.sql.session.timeZone to match its client JVM tz.
+      assert(rs.getTimestamp(1).toString() == "2020-05-28 10:00:00.0")
+    }
+  }
+
+  test("SPARK-31863 Session conf should persist between Thriftserver worker threads") {
+    val iter = 20
+    withJdbcStatement() { statement =>
+      // date 'now' is resolved during parsing, and relies on SQLConf.get to
+      // obtain the current set timezone. We exploit this to run this test.
+      // If the timezones are set correctly to 25 hours apart across threads,
+      // the dates should reflect this.
+
+      // iterate a few times for the odd chance the same thread is selected
+      for (_ <- 0 until iter) {
+        statement.execute("SET spark.sql.session.timeZone=GMT-12")
+        val firstResult = statement.executeQuery("SELECT date 'now'")
+        firstResult.next()
+        val beyondDateLineWest = firstResult.getDate(1)
+
+        statement.execute("SET spark.sql.session.timeZone=GMT+13")
+        val secondResult = statement.executeQuery("SELECT date 'now'")
+        secondResult.next()
+        val dateLineEast = secondResult.getDate(1)
+        assert(
+          dateLineEast after beyondDateLineWest,
+          "SQLConf changes should persist across execution threads")
+      }
+    }
+  }
+
+  test("SPARK-30808: use Java 8 time API and Proleptic Gregorian calendar by default") {
+    withJdbcStatement() { st =>
+      // Proleptic Gregorian calendar has no gap in the range 1582-10-04..1582-10-15
+      val date = "1582-10-10"
+      val rs = st.executeQuery(s"select date '$date'")
+      rs.next()
+      val expected = java.sql.Date.valueOf(date)
+      assert(rs.getDate(1) === expected)
+      assert(rs.getString(1) === expected.toString)
+    }
+  }
 }
 
 class SingleSessionSuite extends HiveThriftJdbcTest {
@@ -780,7 +889,7 @@ class SingleSessionSuite extends HiveThriftJdbcTest {
     s"--conf ${HIVE_THRIFT_SERVER_SINGLESESSION.key}=true" :: Nil
 
   test("share the temporary functions across JDBC connections") {
-    withMultipleConnectionJdbcStatement()(
+    withMultipleConnectionJdbcStatement("test_udtf")(
       { statement =>
         val jarPath = "../hive/src/test/resources/TestUDTF.jar"
         val jarURL = s"file://${System.getProperty("user.dir")}/$jarPath"
@@ -790,6 +899,8 @@ class SingleSessionSuite extends HiveThriftJdbcTest {
         Seq(
           "SET foo=bar",
           s"ADD JAR $jarURL",
+          "CREATE TABLE test_udtf(key INT, value STRING) USING hive",
+          s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test_udtf",
           s"""CREATE TEMPORARY FUNCTION udtf_count2
               |AS 'org.apache.spark.sql.hive.execution.GenericUDTFCount2'
            """.stripMargin
@@ -816,6 +927,16 @@ class SingleSessionSuite extends HiveThriftJdbcTest {
 
           assert(rs2.next())
           assert(rs2.getString(1) === "Usage: N/A.")
+
+          val rs3 = statement.executeQuery(
+            "SELECT key, cc FROM test_udtf LATERAL VIEW udtf_count2(value) dd AS cc")
+          assert(rs3.next())
+          assert(rs3.getInt(1) === 165)
+          assert(rs3.getInt(2) === 5)
+
+          assert(rs3.next())
+          assert(rs3.getInt(1) === 165)
+          assert(rs3.getInt(2) === 5)
         } finally {
           statement.executeQuery("DROP TEMPORARY FUNCTION udtf_count2")
         }
@@ -872,6 +993,39 @@ class SingleSessionSuite extends HiveThriftJdbcTest {
   }
 }
 
+class HiveThriftCleanUpScratchDirSuite extends HiveThriftJdbcTest{
+  var tempScratchDir: File = _
+
+  override protected def beforeAll(): Unit = {
+    tempScratchDir = Utils.createTempDir()
+    tempScratchDir.setWritable(true, false)
+    assert(tempScratchDir.list().isEmpty)
+    new File(tempScratchDir.getAbsolutePath + File.separator + "SPARK-31626").createNewFile()
+    assert(tempScratchDir.list().nonEmpty)
+    super.beforeAll()
+  }
+
+  override def mode: ServerMode.Value = ServerMode.binary
+
+  override protected def extraConf: Seq[String] =
+    s" --hiveconf ${ConfVars.HIVE_START_CLEANUP_SCRATCHDIR}=true " ::
+       s"--hiveconf ${ConfVars.SCRATCHDIR}=${tempScratchDir.getAbsolutePath}" :: Nil
+
+  test("Cleanup the Hive scratchdir when starting the Hive Server") {
+    assert(!tempScratchDir.exists())
+    withJdbcStatement() { statement =>
+      val rs = statement.executeQuery("SELECT id FROM range(1)")
+      assert(rs.next())
+      assert(rs.getLong(1) === 0L)
+    }
+  }
+
+  override protected def afterAll(): Unit = {
+    Utils.deleteRecursively(tempScratchDir)
+    super.afterAll()
+  }
+}
+
 class HiveThriftHttpServerSuite extends HiveThriftJdbcTest {
   override def mode: ServerMode.Value = ServerMode.http
 
@@ -879,7 +1033,7 @@ class HiveThriftHttpServerSuite extends HiveThriftJdbcTest {
     withJdbcStatement("test") { statement =>
       val queries = Seq(
         "SET spark.sql.shuffle.partitions=3",
-        "CREATE TABLE test(key INT, val STRING)",
+        "CREATE TABLE test(key INT, val STRING) USING hive",
         s"LOAD DATA LOCAL INPATH '${TestData.smallKv}' OVERWRITE INTO TABLE test",
         "CACHE TABLE test")
 

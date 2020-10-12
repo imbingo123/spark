@@ -528,6 +528,9 @@ setGeneric("persist", function(x, newLevel) { standardGeneric("persist") })
 #' @rdname printSchema
 setGeneric("printSchema", function(x) { standardGeneric("printSchema") })
 
+#' @rdname registerTempTable-deprecated
+setGeneric("registerTempTable", function(x, tableName) { standardGeneric("registerTempTable") })
+
 #' @rdname rename
 setGeneric("rename", function(x, ...) { standardGeneric("rename") })
 
@@ -635,7 +638,7 @@ setGeneric("union", function(x, y) { standardGeneric("union") })
 setGeneric("unionAll", function(x, y) { standardGeneric("unionAll") })
 
 #' @rdname unionByName
-setGeneric("unionByName", function(x, y) { standardGeneric("unionByName") })
+setGeneric("unionByName", function(x, y, ...) { standardGeneric("unionByName") })
 
 #' @rdname unpersist
 setGeneric("unpersist", function(x, ...) { standardGeneric("unpersist") })
@@ -726,6 +729,12 @@ setGeneric("over", function(x, window) { standardGeneric("over") })
 #' @rdname eq_null_safe
 setGeneric("%<=>%", function(x, value) { standardGeneric("%<=>%") })
 
+#' @rdname withField
+setGeneric("withField", function(x, fieldName, col) { standardGeneric("withField") })
+
+#' @rdname dropFields
+setGeneric("dropFields", function(x, ...) { standardGeneric("dropFields") })
+
 ###################### WindowSpec Methods ##########################
 
 #' @rdname partitionBy
@@ -759,6 +768,10 @@ setGeneric("approxCountDistinct", function(x, ...) { standardGeneric("approxCoun
 
 #' @rdname column_collection_functions
 #' @name NULL
+setGeneric("array_aggregate", function(x, zero, merge, ...) { standardGeneric("array_aggregate") })
+
+#' @rdname column_collection_functions
+#' @name NULL
 setGeneric("array_contains", function(x, value) { standardGeneric("array_contains") })
 
 #' @rdname column_collection_functions
@@ -768,6 +781,18 @@ setGeneric("array_distinct", function(x) { standardGeneric("array_distinct") })
 #' @rdname column_collection_functions
 #' @name NULL
 setGeneric("array_except", function(x, y) { standardGeneric("array_except") })
+
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("array_exists", function(x, f) { standardGeneric("array_exists") })
+
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("array_forall", function(x, f) { standardGeneric("array_forall") })
+
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("array_filter", function(x, f) { standardGeneric("array_filter") })
 
 #' @rdname column_collection_functions
 #' @name NULL
@@ -803,6 +828,10 @@ setGeneric("array_sort", function(x) { standardGeneric("array_sort") })
 
 #' @rdname column_collection_functions
 #' @name NULL
+setGeneric("array_transform", function(x, f) { standardGeneric("array_transform") })
+
+#' @rdname column_collection_functions
+#' @name NULL
 setGeneric("arrays_overlap", function(x, y) { standardGeneric("arrays_overlap") })
 
 #' @rdname column_collection_functions
@@ -813,9 +842,17 @@ setGeneric("array_union", function(x, y) { standardGeneric("array_union") })
 #' @name NULL
 setGeneric("arrays_zip", function(x, ...) { standardGeneric("arrays_zip") })
 
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("arrays_zip_with", function(x, y, f) { standardGeneric("arrays_zip_with") })
+
 #' @rdname column_string_functions
 #' @name NULL
 setGeneric("ascii", function(x) { standardGeneric("ascii") })
+
+#' @rdname column_misc_functions
+#' @name NULL
+setGeneric("assert_true", function(x, errMsg = NULL) { standardGeneric("assert_true") })
 
 #' @param x Column to compute on or a GroupedData object.
 #' @param ... additional argument(s) when \code{x} is a GroupedData object.
@@ -1088,6 +1125,10 @@ setGeneric("map_entries", function(x) { standardGeneric("map_entries") })
 
 #' @rdname column_collection_functions
 #' @name NULL
+setGeneric("map_filter", function(x, f) { standardGeneric("map_filter") })
+
+#' @rdname column_collection_functions
+#' @name NULL
 setGeneric("map_from_arrays", function(x, y) { standardGeneric("map_from_arrays") })
 
 #' @rdname column_collection_functions
@@ -1101,6 +1142,10 @@ setGeneric("map_keys", function(x) { standardGeneric("map_keys") })
 #' @rdname column_collection_functions
 #' @name NULL
 setGeneric("map_values", function(x) { standardGeneric("map_values") })
+
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("map_zip_with", function(x, y, f) { standardGeneric("map_zip_with") })
 
 #' @rdname column_misc_functions
 #' @name NULL
@@ -1126,6 +1171,10 @@ setGeneric("months_between", function(y, x, ...) { standardGeneric("months_betwe
 #' @rdname count
 setGeneric("n", function(x) { standardGeneric("n") })
 
+#' @rdname column_window_functions
+#' @name NULL
+setGeneric("nth_value", function(x, offset, ...) { standardGeneric("nth_value") })
+
 #' @rdname column_nonaggregate_functions
 #' @name NULL
 setGeneric("nanvl", function(y, x) { standardGeneric("nanvl") })
@@ -1149,9 +1198,18 @@ setGeneric("ntile", function(x) { standardGeneric("ntile") })
 #' @name NULL
 setGeneric("n_distinct", function(x, ...) { standardGeneric("n_distinct") })
 
+#' @rdname column_string_functions
+#' @name NULL
+setGeneric("overlay", function(x, replace, pos, ...) { standardGeneric("overlay") })
+
 #' @rdname column_window_functions
 #' @name NULL
 setGeneric("percent_rank", function(x = "missing") { standardGeneric("percent_rank") })
+
+#' @rdname column_aggregate_functions
+#' @name NULL
+setGeneric("percentile_approx",
+           function(x, percentage, ...) { standardGeneric("percentile_approx") })
 
 #' @rdname column_math_functions
 #' @name NULL
@@ -1168,6 +1226,10 @@ setGeneric("posexplode_outer", function(x) { standardGeneric("posexplode_outer")
 #' @rdname column_datetime_functions
 #' @name NULL
 setGeneric("quarter", function(x) { standardGeneric("quarter") })
+
+#' @rdname column_misc_functions
+#' @name NULL
+setGeneric("raise_error", function(x) { standardGeneric("raise_error") })
 
 #' @rdname column_nonaggregate_functions
 #' @name NULL
@@ -1310,6 +1372,18 @@ setGeneric("substring_index", function(x, delim, count) { standardGeneric("subst
 #' @name NULL
 setGeneric("sumDistinct", function(x) { standardGeneric("sumDistinct") })
 
+#' @rdname column_datetime_functions
+#' @name timestamp_seconds
+setGeneric("timestamp_seconds", function(x) { standardGeneric("timestamp_seconds") })
+
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("transform_keys", function(x, f) {  standardGeneric("transform_keys") })
+
+#' @rdname column_collection_functions
+#' @name NULL
+setGeneric("transform_values", function(x, f) { standardGeneric("transform_values") })
+
 #' @rdname column_math_functions
 #' @name NULL
 setGeneric("degrees", function(x) { standardGeneric("degrees") })
@@ -1386,6 +1460,10 @@ setGeneric("var_pop", function(x) { standardGeneric("var_pop") })
 #' @name NULL
 setGeneric("var_samp", function(x) { standardGeneric("var_samp") })
 
+#' @rdname column_ml_functions
+#' @name NULL
+setGeneric("vector_to_array", function(x, ...) { standardGeneric("vector_to_array") })
+
 #' @rdname column_datetime_functions
 #' @name NULL
 setGeneric("weekofyear", function(x) { standardGeneric("weekofyear") })
@@ -1426,6 +1504,14 @@ setGeneric("spark.als", function(data, ...) { standardGeneric("spark.als") })
 #' @rdname spark.bisectingKmeans
 setGeneric("spark.bisectingKmeans",
            function(data, formula, ...) { standardGeneric("spark.bisectingKmeans") })
+
+#' @rdname spark.fmClassifier
+setGeneric("spark.fmClassifier",
+           function(data, formula, ...) { standardGeneric("spark.fmClassifier") })
+
+#' @rdname spark.fmRegressor
+setGeneric("spark.fmRegressor",
+           function(data, formula, ...) { standardGeneric("spark.fmRegressor") })
 
 #' @rdname spark.gaussianMixture
 setGeneric("spark.gaussianMixture",
@@ -1494,6 +1580,10 @@ setGeneric("spark.findFrequentSequentialPatterns",
 #' @rdname spark.powerIterationClustering
 setGeneric("spark.assignClusters",
             function(data, ...) { standardGeneric("spark.assignClusters") })
+
+#' @rdname spark.lm
+setGeneric("spark.lm",
+           function(data, formula, ...) { standardGeneric("spark.lm") })
 
 #' @param object a fitted ML model object.
 #' @param path the directory where the model is saved.

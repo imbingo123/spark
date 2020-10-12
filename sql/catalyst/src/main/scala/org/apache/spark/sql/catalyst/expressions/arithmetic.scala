@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.analysis.{TypeCheckResult, TypeCoercion}
+import org.apache.spark.sql.catalyst.analysis.{FunctionRegistry, TypeCheckResult, TypeCoercion}
 import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.expressions.codegen.Block._
 import org.apache.spark.sql.catalyst.util.{IntervalUtils, TypeUtils}
@@ -32,7 +32,8 @@ import org.apache.spark.unsafe.types.CalendarInterval
     Examples:
       > SELECT _FUNC_(1);
        -1
-  """)
+  """,
+  since = "1.0.0")
 case class UnaryMinus(child: Expression) extends UnaryExpression
     with ExpectsInputTypes with NullIntolerant {
   private val checkOverflow = SQLConf.get.ansiEnabled
@@ -75,19 +76,33 @@ case class UnaryMinus(child: Expression) extends UnaryExpression
       """})
     case _: CalendarIntervalType =>
       val iu = IntervalUtils.getClass.getCanonicalName.stripSuffix("$")
-      defineCodeGen(ctx, ev, c => s"$iu.negate($c)")
+      val method = if (checkOverflow) "negateExact" else "negate"
+      defineCodeGen(ctx, ev, c => s"$iu.$method($c)")
   }
 
   protected override def nullSafeEval(input: Any): Any = dataType match {
+    case CalendarIntervalType if checkOverflow =>
+      IntervalUtils.negateExact(input.asInstanceOf[CalendarInterval])
     case CalendarIntervalType => IntervalUtils.negate(input.asInstanceOf[CalendarInterval])
-    case  _ => numeric.negate(input)
+    case _ => numeric.negate(input)
   }
 
-  override def sql: String = s"(- ${child.sql})"
+  override def sql: String = {
+    getTagValue(FunctionRegistry.FUNC_ALIAS).getOrElse("-") match {
+      case "-" => s"(- ${child.sql})"
+      case funcName => s"$funcName(${child.sql})"
+    }
+  }
 }
 
 @ExpressionDescription(
-  usage = "_FUNC_(expr) - Returns the value of `expr`.")
+  usage = "_FUNC_(expr) - Returns the value of `expr`.",
+  examples = """
+    Examples:
+      > SELECT _FUNC_(1);
+       1
+  """,
+  since = "1.5.0")
 case class UnaryPositive(child: Expression)
     extends UnaryExpression with ExpectsInputTypes with NullIntolerant {
   override def prettyName: String = "positive"
@@ -113,7 +128,8 @@ case class UnaryPositive(child: Expression)
     Examples:
       > SELECT _FUNC_(-1);
        1
-  """)
+  """,
+  since = "1.2.0")
 case class Abs(child: Expression)
     extends UnaryExpression with ExpectsInputTypes with NullIntolerant {
 
@@ -215,7 +231,8 @@ object BinaryArithmetic {
     Examples:
       > SELECT 1 _FUNC_ 2;
        3
-  """)
+  """,
+  since = "1.0.0")
 case class Add(left: Expression, right: Expression) extends BinaryArithmetic {
 
   override def inputType: AbstractDataType = TypeCollection.NumericAndInterval
@@ -224,13 +241,17 @@ case class Add(left: Expression, right: Expression) extends BinaryArithmetic {
 
   override def decimalMethod: String = "$plus"
 
-  override def calendarIntervalMethod: String = "add"
+  override def calendarIntervalMethod: String = if (checkOverflow) "addExact" else "add"
 
   private lazy val numeric = TypeUtils.getNumeric(dataType, checkOverflow)
 
   protected override def nullSafeEval(input1: Any, input2: Any): Any = dataType match {
-    case CalendarIntervalType => IntervalUtils.add(
-      input1.asInstanceOf[CalendarInterval], input2.asInstanceOf[CalendarInterval])
+    case CalendarIntervalType if checkOverflow =>
+      IntervalUtils.addExact(
+        input1.asInstanceOf[CalendarInterval], input2.asInstanceOf[CalendarInterval])
+    case CalendarIntervalType =>
+      IntervalUtils.add(
+        input1.asInstanceOf[CalendarInterval], input2.asInstanceOf[CalendarInterval])
     case _ => numeric.plus(input1, input2)
   }
 
@@ -243,7 +264,8 @@ case class Add(left: Expression, right: Expression) extends BinaryArithmetic {
     Examples:
       > SELECT 2 _FUNC_ 1;
        1
-  """)
+  """,
+  since = "1.0.0")
 case class Subtract(left: Expression, right: Expression) extends BinaryArithmetic {
 
   override def inputType: AbstractDataType = TypeCollection.NumericAndInterval
@@ -252,13 +274,17 @@ case class Subtract(left: Expression, right: Expression) extends BinaryArithmeti
 
   override def decimalMethod: String = "$minus"
 
-  override def calendarIntervalMethod: String = "subtract"
+  override def calendarIntervalMethod: String = if (checkOverflow) "subtractExact" else "subtract"
 
   private lazy val numeric = TypeUtils.getNumeric(dataType, checkOverflow)
 
   protected override def nullSafeEval(input1: Any, input2: Any): Any = dataType match {
-    case CalendarIntervalType => IntervalUtils.subtract(
-      input1.asInstanceOf[CalendarInterval], input2.asInstanceOf[CalendarInterval])
+    case CalendarIntervalType if checkOverflow =>
+      IntervalUtils.subtractExact(
+        input1.asInstanceOf[CalendarInterval], input2.asInstanceOf[CalendarInterval])
+    case CalendarIntervalType =>
+      IntervalUtils.subtract(
+        input1.asInstanceOf[CalendarInterval], input2.asInstanceOf[CalendarInterval])
     case _ => numeric.minus(input1, input2)
   }
 
@@ -271,7 +297,8 @@ case class Subtract(left: Expression, right: Expression) extends BinaryArithmeti
     Examples:
       > SELECT 2 _FUNC_ 3;
        6
-  """)
+  """,
+  since = "1.0.0")
 case class Multiply(left: Expression, right: Expression) extends BinaryArithmetic {
 
   override def inputType: AbstractDataType = NumericType
@@ -366,7 +393,8 @@ trait DivModLike extends BinaryArithmetic {
        1.5
       > SELECT 2L _FUNC_ 2L;
        1.0
-  """)
+  """,
+  since = "1.0.0")
 // scalastyle:on line.size.limit
 case class Divide(left: Expression, right: Expression) extends DivModLike {
 
@@ -384,7 +412,7 @@ case class Divide(left: Expression, right: Expression) extends DivModLike {
 
 // scalastyle:off line.size.limit
 @ExpressionDescription(
-  usage = "expr1 _FUNC_ expr2 - Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0. The result is casted to long if spark.sql.legacy.integralDivide.returnBigint is true, otherwise the data type of the operands is returned.",
+  usage = "expr1 _FUNC_ expr2 - Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0. The result is casted to long.",
   examples = """
     Examples:
       > SELECT 3 _FUNC_ 2;
@@ -392,26 +420,17 @@ case class Divide(left: Expression, right: Expression) extends DivModLike {
   """,
   since = "3.0.0")
 // scalastyle:on line.size.limit
-case class IntegralDivide(left: Expression, right: Expression) extends DivModLike {
+case class IntegralDivide(
+    left: Expression,
+    right: Expression) extends DivModLike {
 
-  override def inputType: AbstractDataType = TypeCollection(IntegralType, DecimalType)
+  override def inputType: AbstractDataType = TypeCollection(LongType, DecimalType)
 
-  override def dataType: DataType = if (SQLConf.get.integralDivideReturnLong) {
-    LongType
-  } else {
-    left.dataType
-  }
+  override def dataType: DataType = LongType
 
   override def symbol: String = "/"
   override def decimalMethod: String = "quot"
-  override def decimalToDataTypeCodeGen(decimalResult: String): String = {
-    if (SQLConf.get.integralDivideReturnLong) {
-      s"$decimalResult.toLong()"
-    } else {
-      decimalResult
-    }
-  }
-
+  override def decimalToDataTypeCodeGen(decimalResult: String): String = s"$decimalResult.toLong()"
   override def sqlOperator: String = "div"
 
   private lazy val div: (Any, Any) => Any = {
@@ -421,23 +440,23 @@ case class IntegralDivide(left: Expression, right: Expression) extends DivModLik
       case d: DecimalType =>
         d.asIntegral.asInstanceOf[Integral[Any]]
     }
-    val divide = integral.quot _
-    if (SQLConf.get.integralDivideReturnLong) {
-      val toLong = integral.asInstanceOf[Integral[Any]].toLong _
-      (x, y) => {
-        val res = divide(x, y)
-        if (res == null) {
-          null
-        } else {
-          toLong(res)
-        }
+    (x, y) => {
+      val res = integral.quot(x, y)
+      if (res == null) {
+        null
+      } else {
+        integral.asInstanceOf[Integral[Any]].toLong(res)
       }
-    } else {
-      divide
     }
   }
 
   override def evalOperation(left: Any, right: Any): Any = div(left, right)
+}
+
+object IntegralDivide {
+  def apply(left: Expression, right: Expression): IntegralDivide = {
+    new IntegralDivide(left, right)
+  }
 }
 
 @ExpressionDescription(
@@ -448,13 +467,26 @@ case class IntegralDivide(left: Expression, right: Expression) extends DivModLik
        0.2
       > SELECT MOD(2, 1.8);
        0.2
-  """)
+  """,
+  since = "1.0.0")
 case class Remainder(left: Expression, right: Expression) extends DivModLike {
 
   override def inputType: AbstractDataType = NumericType
 
   override def symbol: String = "%"
   override def decimalMethod: String = "remainder"
+  override def toString: String = {
+    getTagValue(FunctionRegistry.FUNC_ALIAS).getOrElse(sqlOperator) match {
+      case operator if operator == sqlOperator => s"($left $sqlOperator $right)"
+      case funcName => s"$funcName($left, $right)"
+    }
+  }
+  override def sql: String = {
+    getTagValue(FunctionRegistry.FUNC_ALIAS).getOrElse(sqlOperator) match {
+      case operator if operator == sqlOperator => s"(${left.sql} $sqlOperator ${right.sql})"
+      case funcName => s"$funcName(${left.sql}, ${right.sql})"
+    }
+  }
 
   private lazy val mod: (Any, Any) => Any = dataType match {
     // special cases to make float/double primitive types faster
@@ -483,7 +515,8 @@ case class Remainder(left: Expression, right: Expression) extends DivModLike {
        1
       > SELECT _FUNC_(-10, 3);
        2
-  """)
+  """,
+  since = "1.5.0")
 case class Pmod(left: Expression, right: Expression) extends BinaryArithmetic {
 
   override def toString: String = s"pmod($left, $right)"
@@ -639,7 +672,8 @@ case class Pmod(left: Expression, right: Expression) extends BinaryArithmetic {
     Examples:
       > SELECT _FUNC_(10, 9, 2, 4, 3);
        2
-  """)
+  """,
+  since = "1.5.0")
 case class Least(children: Seq[Expression]) extends ComplexTypeMergingExpression {
 
   override def nullable: Boolean = children.forall(_.nullable)
@@ -712,7 +746,8 @@ case class Least(children: Seq[Expression]) extends ComplexTypeMergingExpression
     Examples:
       > SELECT _FUNC_(10, 9, 2, 4, 3);
        10
-  """)
+  """,
+  since = "1.5.0")
 case class Greatest(children: Seq[Expression]) extends ComplexTypeMergingExpression {
 
   override def nullable: Boolean = children.forall(_.nullable)

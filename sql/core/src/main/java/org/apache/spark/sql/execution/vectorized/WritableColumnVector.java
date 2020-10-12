@@ -27,6 +27,7 @@ import org.apache.spark.sql.vectorized.ColumnVector;
 import org.apache.spark.sql.vectorized.ColumnarArray;
 import org.apache.spark.sql.vectorized.ColumnarMap;
 import org.apache.spark.unsafe.array.ByteArrayMethods;
+import org.apache.spark.unsafe.types.CalendarInterval;
 import org.apache.spark.unsafe.types.UTF8String;
 
 /**
@@ -312,6 +313,12 @@ public abstract class WritableColumnVector extends ColumnVector {
   public abstract void putFloats(int rowId, int count, byte[] src, int srcIndex);
 
   /**
+   * Sets values from [src[srcIndex], src[srcIndex + count * 4]) to [rowId, rowId + count)
+   * The data in src must be ieee formatted floats in little endian.
+   */
+  public abstract void putFloatsLittleEndian(int rowId, int count, byte[] src, int srcIndex);
+
+  /**
    * Sets `value` to the value at rowId.
    */
   public abstract void putDouble(int rowId, double value);
@@ -331,6 +338,12 @@ public abstract class WritableColumnVector extends ColumnVector {
    * The data in src must be ieee formatted doubles in platform native endian.
    */
   public abstract void putDoubles(int rowId, int count, byte[] src, int srcIndex);
+
+  /**
+   * Sets values from [src[srcIndex], src[srcIndex + count * 8]) to [rowId, rowId + count)
+   * The data in src must be ieee formatted doubles in little endian.
+   */
+  public abstract void putDoublesLittleEndian(int rowId, int count, byte[] src, int srcIndex);
 
   /**
    * Puts a byte array that already exists in this column.
@@ -370,6 +383,12 @@ public abstract class WritableColumnVector extends ColumnVector {
       BigInteger bigInteger = value.toJavaBigDecimal().unscaledValue();
       putByteArray(rowId, bigInteger.toByteArray());
     }
+  }
+
+  public void putInterval(int rowId, CalendarInterval value) {
+    getChild(0).putInt(rowId, value.months);
+    getChild(1).putInt(rowId, value.days);
+    getChild(2).putLong(rowId, value.microseconds);
   }
 
   @Override
